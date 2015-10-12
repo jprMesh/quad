@@ -1,8 +1,4 @@
-// I2Cdev and MPU6050 must be installed as libraries, or else the .cpp/.h files
-// for both classes must be in the include path of your project
 #include "I2Cdev.h"
-#include "Servo.h"
-
 #include "MPU6050_6Axis_MotionApps20.h"
 //#include "MPU6050.h" // not necessary if using MotionApps include file
 
@@ -11,6 +7,9 @@
 #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
     #include "Wire.h"
 #endif
+
+#include "Servo.h"
+#include "quadcopter.h"
 
 // class default I2C address is 0x68
 // specific I2C addresses may be passed as a parameter here
@@ -36,22 +35,7 @@ uint8_t fifoBuffer[64]; // FIFO storage buffer
 
 // orientation/motion vars
 Quaternion q;           // [w, x, y, z]         quaternion container
-VectorFloat gravity;    // [x, y, z]            gravity vector
-float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
-
-// ew globals
-long int timer;
-
-// motors
-Servo FL;
-Servo FR;
-Servo BL;
-Servo BR;
-
-// setpoints
-double ySet = 45;
-double pSet = 0;
-double rSet = 0;
+float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container
 
 // Interrupt detection routine
 volatile bool mpuInterrupt = false;     // indicates whether MPU interrupt pin has gone high
@@ -59,9 +43,19 @@ void dmpDataReady() {
     mpuInterrupt = true;
 }
 
+// Globals
+long int timer;
+Quadcopter *quad;
+
 // Setup
 void setup() {
-    motorInit();
+    quad = new Quadcopter(9, 5, 10,3);
+    quad->desiredOri.yaw = 0;
+    quad->desiredOri.pitch = 0;
+    quad->desiredOri.roll = 0;
+    quad->kp = 1.0/70;
+    quad->ki = 0;
+    quad->kd = 0;
 
     // join I2C bus (I2Cdev library doesn't do this automatically)
     #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
@@ -160,70 +154,18 @@ void loop() {
 
         // display Euler angles in degrees
         mpu.dmpGetQuaternion(&q, fifoBuffer);
-        mpu.dmpGetYawPitchRoll(ypr, &q);
-        
-        Serial.print(ypr[1] * 180/M_PI);
-        Serial.print('\t');
-        Serial.print(ypr[2] * 180/M_PI);
+        quad->orientation.updateFromQ(&q);
+        quad->updateforPID();
 
-        // Do stuff with our new values
-        if (millis()-timer > 5000 && millis()-timer < 10000) {
-            MotorAdjust();
+        // Drive quadcopter for some amount of time
+        if (millis()-timer > 5000 && millis()-timer < 8000) {
+                           // y   p   r
+            quad->driveMotors(0, +1, -1,  // FL
+                              0, +1, +1,  // FR
+                              0, -1, -1,  // BL
+                              0, -1, +1); // BR
         } else {
-            stopMotor(FL);
-            stopMotor(FR);
-            stopMotor(BL);
-            stopMotor(BR);
+            quad->stopMotors();
         }
-        Serial.println("");
     }
-}
-
-void MotorAdjust() {
-    double pPErr = pSet - ypr[1] * 180/3.1415926535;
-    double rPErr = rSet - ypr[2] * 180/3.1415926535;
-
-    double flPErr = (0 - pPErr + rPErr);
-    double frPErr = (0 - pPErr - rPErr);
-    double blPErr = (0 + pPErr + rPErr);
-    double brPErr = (0 + pPErr - rPErr);
-
-    Serial.print('\t');
-    Serial.print(pPErr);
-    Serial.print('\t');
-    Serial.print(rPErr);
-    Serial.print('\t');
-    Serial.print(flPErr);
-    Serial.print('\t');
-    Serial.print(frPErr);
-    Serial.print('\t');
-    Serial.print(blPErr);
-    Serial.print('\t');
-    Serial.print(brPErr);
-
-    setMotor(FL, flPErr/20);
-    setMotor(FR, frPErr/20);
-    setMotor(BL, blPErr/20);
-    setMotor(BR, brPErr/20);
-}
-
-void setMotor(Servo servo, double spee) {
-    spee = constrain(spee, -1.0, 1.0);
-    int val = map(spee*1024, -1024, 1024, 1170, 1450);
-    servo.writeMicroseconds(val);
-}
-
-void stopMotor(Servo servo) {
-    servo.writeMicroseconds(1000);
-}
-
-void motorInit() {
-    FL.attach(9);
-    FR.attach(5);
-    BL.attach(10);
-    BR.attach(3);
-    stopMotor(FL);
-    stopMotor(FR);
-    stopMotor(BL);
-    stopMotor(BR);
 }
